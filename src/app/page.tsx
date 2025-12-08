@@ -1,65 +1,118 @@
-import Image from "next/image";
+// app/page.tsx
+'use client'
 
-export default function Home() {
+import { useEffect, useState } from 'react'
+import { supabase } from '@/lib/supabaseClient'
+import type { Book } from '@/lib/types'
+import AiPanel from '@/components/AiPanel'
+
+export default function HomePage() {
+  const [books, setBooks] = useState<Book[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
+
+  useEffect(() => {
+    const fetchBooks = async () => {
+      setLoading(true)
+      setError(null)
+
+      let query = supabase
+        .from('books')
+        .select('*')
+        .order('sort_title', { ascending: true })
+        .limit(200)
+
+      if (search.trim()) {
+        query = query.or(
+          `title.ilike.%${search}%,author_last_first.ilike.%${search}%`
+        )
+      }
+
+      const { data, error } = await query
+
+      if (error) {
+        console.error(error)
+        setError(error.message)
+      } else {
+        setBooks((data ?? []) as Book[])
+      }
+
+      setLoading(false)
+    }
+
+    fetchBooks()
+  }, [search])
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+    <main className="min-h-screen bg-slate-950 text-slate-100">
+      <div className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-8 md:flex-row">
+        {/* Left: library browser */}
+        <section className="w-full md:w-2/3">
+          <header className="mb-4">
+            <h1 className="text-3xl font-semibold tracking-tight">
+              Vintage SF Library
+            </h1>
+            <p className="mt-2 text-sm text-slate-300">
+              Browse and query your collection of classic science fiction.
+            </p>
+          </header>
+
+          <div className="mb-4">
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search by title or author..."
+              className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm focus:outline-none focus:ring focus:ring-sky-500"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
-  );
+          </div>
+
+          {loading && <p className="text-sm">Loading books…</p>}
+          {error && (
+            <p className="text-sm text-red-400">Error: {error}</p>
+          )}
+
+          <ul className="mt-2 space-y-2 text-sm">
+            {books.map(book => (
+              <li
+                key={book.id}
+                className="rounded border border-slate-800 bg-slate-900/60 p-3"
+              >
+                <div className="flex justify-between gap-2">
+                  <div>
+                    <div className="font-semibold">{book.title}</div>
+                    <div className="text-xs text-slate-300">
+                      {book.author_last_first}
+                    </div>
+                  </div>
+                  <div className="text-right text-[11px] text-slate-400">
+                    {book.pub_year && <div>{book.pub_year}</div>}
+                    {book.publisher && <div>{book.publisher}</div>}
+                    {book.signed && <div>Signed</div>}
+                  </div>
+                </div>
+                {book.notes && (
+                  <p className="mt-1 line-clamp-2 text-[11px] text-slate-400">
+                    {book.notes}
+                  </p>
+                )}
+              </li>
+            ))}
+            {!loading && !error && books.length === 0 && (
+              <p className="mt-4 text-sm text-slate-300">
+                No books match your search.
+              </p>
+            )}
+          </ul>
+        </section>
+
+        {/* Right: AI panel */}
+        <section className="w-full md:w-1/3">
+          <AiPanel />
+        </section>
+      </div>
+    </main>
+  )
 }
+
