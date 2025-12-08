@@ -100,7 +100,7 @@ ${context}
 
     try {
       const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini', // or another chat-capable model you have access to
+        model: 'gpt-4o', // or another chat-capable model you have access to
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
