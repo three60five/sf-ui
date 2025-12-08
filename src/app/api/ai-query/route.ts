@@ -4,23 +4,50 @@ import { supabase } from '@/lib/supabaseClient'
 import OpenAI from 'openai'
 import type { Book } from '@/lib/types'
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-})
+// Force Node runtime (safer with OpenAI SDK)
+export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+const openaiApiKey = process.env.OPENAI_API_KEY
+
+const openai = openaiApiKey
+  ? new OpenAI({ apiKey: openaiApiKey })
+  : null
 
 export async function POST(req: NextRequest) {
   try {
-    const { question } = await req.json()
-
-    if (!question || typeof question !== 'string') {
+    // 1) Basic input validation
+    let body: any
+    try {
+      body = await req.json()
+    } catch {
       return NextResponse.json(
-        { error: 'Missing question' },
+        { error: 'Invalid JSON body' },
         { status: 400 }
       )
     }
 
-    // 1) Get candidate books from Supabase (simple text search for now)
-    const { data, error } = await supabase
+    const question = body?.question
+    if (!question || typeof question !== 'string') {
+      return NextResponse.json(
+        { error: 'Missing "question" field in request body' },
+        { status: 400 }
+      )
+    }
+
+    // 2) Check OpenAI configuration
+    if (!openai) {
+      return NextResponse.json(
+        {
+          error:
+            'OPENAI_API_KEY is not set on the server. Add it to your environment variables and redeploy.',
+        },
+        { status: 500 }
+      )
+    }
+
+    // 3) Supabase query for relevant books
+    const { data, error: dbError } = await supabase
       .from('books')
       .select('*')
       .or(
@@ -28,26 +55,28 @@ export async function POST(req: NextRequest) {
       )
       .limit(30)
 
-    if (error) {
-      console.error('Supabase error:', error)
+    if (dbError) {
+      console.error('Supabase error in /api/ai-query:', dbError)
       return NextResponse.json(
-        { error: 'Database error' },
+        { error: `Supabase error: ${dbError.message}` },
         { status: 500 }
       )
     }
 
     const books = (data ?? []) as Book[]
 
-    // 2) Build a compact text context for the model
-    const context = books
-      .map(
-        b =>
-          `- "${b.title}" by ${b.author_last_first}` +
-          (b.pub_year ? ` (${b.pub_year})` : '') +
-          (b.publisher ? `, ${b.publisher}` : '') +
-          (b.notes ? ` — Notes: ${b.notes}` : '')
-      )
-      .join('\n')
+    const context =
+      books.length === 0
+        ? '(No matching books were found for this query in the collection.)'
+        : books
+            .map(
+              b =>
+                `- "${b.title}" by ${b.author_last_first}` +
+                (b.pub_year ? ` (${b.pub_year})` : '') +
+                (b.publisher ? `, ${b.publisher}` : '') +
+                (b.notes ? ` — Notes: ${b.notes}` : '')
+            )
+            .join('\n')
 
     const systemPrompt = `
 You are a helpful sci-fi librarian specializing in vintage science fiction.
@@ -63,32 +92,46 @@ If the answer isn't clear from the data, say so and suggest the closest matches.
 Question: ${question}
 
 Books in the collection:
-${context || '(no matching books were found for this query)'}
+${context}
 `
 
-    // 3) Call the model
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini', // or another chat model you prefer
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature: 0.4,
-      max_tokens: 500,
-    })
+    // 4) Call OpenAI
+    let answer = ''
 
-    const answer =
-      completion.choices[0]?.message?.content ??
-      'I could not generate an answer.'
+    try {
+      const completion = await openai.chat.completions.create({
+        model: 'gpt-4o-mini', // or another chat-capable model you have access to
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.4,
+        max_tokens: 500,
+      })
 
-    return NextResponse.json({
-      answer,
-      books,
-    })
-  } catch (err) {
-    console.error(err)
+      answer =
+        completion.choices[0]?.message?.content ??
+        'I could not generate an answer.'
+    } catch (openAiError: any) {
+      console.error('OpenAI error in /api/ai-query:', openAiError)
+      return NextResponse.json(
+        {
+          error:
+            'OpenAI request failed. Check that your OPENAI_API_KEY is valid and that the model name is correct.',
+          details: openAiError?.message || String(openAiError),
+        },
+        { status: 500 }
+      )
+    }
+
+    return NextResponse.json({ answer, books })
+  } catch (err: any) {
+    console.error('Unexpected error in /api/ai-query:', err)
     return NextResponse.json(
-      { error: 'Unexpected error' },
+      {
+        error: 'Unexpected server error in /api/ai-query.',
+        details: err?.message || String(err),
+      },
       { status: 500 }
     )
   }
