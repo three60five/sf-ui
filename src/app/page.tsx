@@ -34,16 +34,6 @@ type Suggestion =
       count?: number
     }
 
-function escapePostgrestOrValue(input: string) {
-  // Escape characters that break PostgREST logic trees in `or=(...)`
-  // Order matters: escape backslash first.
-  return input
-    .replace(/\\/g, '\\\\')
-    .replace(/,/g, '\\,')
-    .replace(/\(/g, '\\(')
-    .replace(/\)/g, '\\)')
-}
-
 function swapCommaName(name: string) {
   // "Last, First" -> "First Last" (best effort)
   const parts = name.split(',').map(s => s.trim())
@@ -67,7 +57,6 @@ function scoreMatch(query: string, candidate: string) {
   if (!q) return 0
   if (c === q) return 100
   if (c.startsWith(q)) return 80
-  // word-start boosts
   const wordStart = c.split(/\s+/).some(w => w.startsWith(q))
   if (wordStart) return 65
   if (c.includes(q)) return 45
@@ -75,8 +64,6 @@ function scoreMatch(query: string, candidate: string) {
 }
 
 function makeIlikePattern(q: string) {
-  // Supabase .ilike() is safe; it does not use the PostgREST `or=(...)` logic tree string.
-  // Still, we should keep it simple.
   return `%${q.trim()}%`
 }
 
@@ -93,6 +80,7 @@ async function fetchUnionByIlike(
   limitPerField: number
 ) {
   const pattern = makeIlikePattern(q)
+
   const requests = fields.map(field =>
     supabase
       .from('books')
@@ -104,7 +92,6 @@ async function fetchUnionByIlike(
 
   const results = await Promise.all(requests)
 
-  // If any request errors, surface the first error.
   const firstErr = results.find(r => r.error)?.error
   if (firstErr) return { data: null as any, error: firstErr }
 
@@ -130,7 +117,6 @@ export default function HomePage() {
   const applySuggestion = (s: Suggestion) => {
     setSearch(s.value)
     setSuggestOpen(false)
-    // keep focus in the input for rapid refinement
     requestAnimationFrame(() => inputRef.current?.focus())
   }
 
@@ -149,7 +135,7 @@ export default function HomePage() {
     return () => window.removeEventListener('mousedown', onDown)
   }, [])
 
-  // Fetch autocomplete suggestions
+  // Fetch autocomplete suggestions (no PostgREST .or() parsing)
   useEffect(() => {
     let cancelled = false
     const q = trimmed
@@ -164,8 +150,6 @@ export default function HomePage() {
     const t = window.setTimeout(async () => {
       setSuggestLoading(true)
 
-      // Pull a modest slice, then derive grouped suggestions client-side.
-      // This keeps us aligned with the current schema (books table only).
       const { data, error } = await fetchUnionByIlike(
         q,
         ['title', 'author_last_first', 'series', 'publisher'],
@@ -316,24 +300,18 @@ export default function HomePage() {
     }
   }, [trimmed])
 
-  // Fetch filtered books
+  // Fetch filtered books (mobile-first, full width; no .or())
   useEffect(() => {
     const fetchBooks = async () => {
       setLoading(true)
       setError(null)
-
-      let query = supabase
-        .from('books')
-        .select('*')
-        .order('sort_title', { ascending: true })
-        .limit(200)
 
       if (!trimmed) {
         const { data, error } = await supabase
           .from('books')
           .select('*')
           .order('sort_title', { ascending: true })
-          .limit(200)
+          .limit(600)
 
         if (error) {
           console.error(error)
@@ -341,6 +319,7 @@ export default function HomePage() {
         } else {
           setBooks((data ?? []) as Book[])
         }
+
         setLoading(false)
         return
       }
@@ -349,25 +328,21 @@ export default function HomePage() {
         trimmed,
         ['title', 'author_last_first', 'series', 'publisher', 'notes'],
         '*',
-        200
+        250
       )
 
       if (error) {
         console.error(error)
         setError(error.message)
       } else {
-        // Optional: ensure consistent ordering (union can disturb order)
-        const sorted = (data as Book[]).slice().sort((a, b) =>
-          (a.sort_title ?? a.title).localeCompare(b.sort_title ?? b.title)
-        )
-        setBooks(sorted.slice(0, 200))
-      }
-
-      if (error) {
-        console.error(error)
-        setError(error.message)
-      } else {
-        setBooks((data ?? []) as Book[])
+        const sorted = ((data ?? []) as Book[])
+          .slice()
+          .sort((a, b) =>
+            ((a as any).sort_title ?? a.title).localeCompare(
+              ((b as any).sort_title ?? b.title) as string
+            )
+          )
+        setBooks(sorted.slice(0, 600))
       }
 
       setLoading(false)
@@ -378,9 +353,9 @@ export default function HomePage() {
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-8 md:flex-row">
+      <div className="w-full px-3 py-4 sm:px-6 sm:py-6 lg:grid lg:grid-cols-[1fr_360px] lg:gap-6">
         {/* Left: library browser */}
-        <section className="w-full md:w-2/3">
+        <section className="w-full">
           <header className="mb-4">
             <h1 className="text-3xl font-semibold tracking-tight">
               Vintage SF Library
@@ -488,7 +463,6 @@ export default function HomePage() {
                               }
                               onMouseEnter={() => setActiveIndex(idx)}
                               onMouseDown={e => {
-                                // prevent input from losing focus before click
                                 e.preventDefault()
                               }}
                               onClick={() => applySuggestion(s)}
@@ -528,43 +502,48 @@ export default function HomePage() {
           {loading && <p className="text-sm">Loading books…</p>}
           {error && <p className="text-sm text-red-400">Error: {error}</p>}
 
-          <ul className="mt-2 space-y-2 text-sm">
+          <ul className="mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">
             {books.map(book => (
               <li
                 key={book.id}
-                className="rounded border border-slate-800 bg-slate-900/60 p-3"
+                className="rounded border border-slate-800 bg-slate-900/60 p-3 hover:border-slate-700"
               >
                 <div className="flex justify-between gap-2">
-                  <div>
-                    <div className="font-semibold">{book.title}</div>
-                    <div className="text-xs text-slate-300">
+                  <div className="min-w-0">
+                    <div className="truncate font-semibold">{book.title}</div>
+                    <div className="truncate text-xs text-slate-300">
                       {book.author_last_first}
                     </div>
                   </div>
-                  <div className="text-right text-[11px] text-slate-400">
+                  <div className="shrink-0 text-right text-[11px] text-slate-400">
                     {book.pub_year && <div>{book.pub_year}</div>}
                     {book.publisher && <div>{book.publisher}</div>}
                     {book.signed && <div>Signed</div>}
                   </div>
                 </div>
                 {book.notes && (
-                  <p className="mt-1 line-clamp-2 text-[11px] text-slate-400">
+                  <p className="mt-1 line-clamp-3 text-[11px] text-slate-400">
                     {book.notes}
                   </p>
                 )}
               </li>
             ))}
+
             {!loading && !error && books.length === 0 && (
-              <p className="mt-4 text-sm text-slate-300">
-                No books match your search.
-              </p>
+              <li className="col-span-full">
+                <p className="mt-4 text-sm text-slate-300">
+                  No books match your search.
+                </p>
+              </li>
             )}
           </ul>
         </section>
 
         {/* Right: AI panel */}
-        <section className="w-full md:w-1/3">
-          <AiPanel />
+        <section className="mt-6 w-full lg:mt-0">
+          <div className="lg:sticky lg:top-6">
+            <AiPanel />
+          </div>
         </section>
       </div>
     </main>
