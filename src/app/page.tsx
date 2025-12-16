@@ -74,6 +74,44 @@ function scoreMatch(query: string, candidate: string) {
   return 0
 }
 
+function makeIlikePattern(q: string) {
+  // Supabase .ilike() is safe; it does not use the PostgREST `or=(...)` logic tree string.
+  // Still, we should keep it simple.
+  return `%${q.trim()}%`
+}
+
+function dedupeById<T extends { id: number }>(rows: T[]) {
+  const map = new Map<number, T>()
+  for (const r of rows) map.set(r.id, r)
+  return Array.from(map.values())
+}
+
+async function fetchUnionByIlike(
+  q: string,
+  fields: string[],
+  select: string,
+  limitPerField: number
+) {
+  const pattern = makeIlikePattern(q)
+  const requests = fields.map(field =>
+    supabase
+      .from('books')
+      .select(select)
+      .ilike(field, pattern)
+      .order('sort_title', { ascending: true })
+      .limit(limitPerField)
+  )
+
+  const results = await Promise.all(requests)
+
+  // If any request errors, surface the first error.
+  const firstErr = results.find(r => r.error)?.error
+  if (firstErr) return { data: null as any, error: firstErr }
+
+  const allRows = results.flatMap(r => (r.data ?? []) as any[])
+  return { data: dedupeById(allRows), error: null }
+}
+
 export default function HomePage() {
   const [books, setBooks] = useState<Book[]>([])
   const [loading, setLoading] = useState(false)
@@ -128,15 +166,12 @@ export default function HomePage() {
 
       // Pull a modest slice, then derive grouped suggestions client-side.
       // This keeps us aligned with the current schema (books table only).
-      const qSafe = escapePostgrestOrValue(q)
-      const { data, error } = await supabase 
-        .from('books')
-        .select('id,title,author_last_first,series,pub_year,publisher')
-        .or(
-          `title.ilike.%${qSafe}%,author_last_first.ilike.%${qSafe}%,series.ilike.%${qSafe}%,publisher.ilike.%${qSafe}%`
-        )
-        .order('sort_title', { ascending: true })
-        .limit(60)
+      const { data, error } = await fetchUnionByIlike(
+        q,
+        ['title', 'author_last_first', 'series', 'publisher'],
+        'id,title,author_last_first,series,pub_year,publisher',
+        30
+      )
 
       if (cancelled) return
 
@@ -293,12 +328,40 @@ export default function HomePage() {
         .order('sort_title', { ascending: true })
         .limit(200)
 
-      const tSafe = escapePostgrestOrValue(trimmed)
-      query = query.or(
-        `title.ilike.%${tSafe}%,author_last_first.ilike.%${tSafe}%,series.ilike.%${tSafe}%,publisher.ilike.%${tSafe}%,notes.ilike.%${tSafe}%`
+      if (!trimmed) {
+        const { data, error } = await supabase
+          .from('books')
+          .select('*')
+          .order('sort_title', { ascending: true })
+          .limit(200)
+
+        if (error) {
+          console.error(error)
+          setError(error.message)
+        } else {
+          setBooks((data ?? []) as Book[])
+        }
+        setLoading(false)
+        return
+      }
+
+      const { data, error } = await fetchUnionByIlike(
+        trimmed,
+        ['title', 'author_last_first', 'series', 'publisher', 'notes'],
+        '*',
+        200
       )
 
-      const { data, error } = await query
+      if (error) {
+        console.error(error)
+        setError(error.message)
+      } else {
+        // Optional: ensure consistent ordering (union can disturb order)
+        const sorted = (data as Book[]).slice().sort((a, b) =>
+          (a.sort_title ?? a.title).localeCompare(b.sort_title ?? b.title)
+        )
+        setBooks(sorted.slice(0, 200))
+      }
 
       if (error) {
         console.error(error)
