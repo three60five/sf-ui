@@ -111,12 +111,15 @@ export default function HomePage() {
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const suggestBoxRef = useRef<HTMLDivElement | null>(null)
+  const suppressSuggestOpenRef = useRef(false)
 
   const trimmed = useMemo(() => search.trim(), [search])
 
   const applySuggestion = (s: Suggestion) => {
+    suppressSuggestOpenRef.current = true
     setSearch(s.value)
     setSuggestOpen(false)
+    setActiveIndex(0)
     requestAnimationFrame(() => inputRef.current?.focus())
   }
 
@@ -139,6 +142,13 @@ export default function HomePage() {
   useEffect(() => {
     let cancelled = false
     const q = trimmed
+
+    if (suppressSuggestOpenRef.current) {
+      // We just applied a suggestion; keep the dropdown closed until user types again.
+      setSuggestOpen(false)
+      setSuggestLoading(false)
+      return
+    }
 
     if (!q) {
       setSuggestions([])
@@ -290,7 +300,9 @@ export default function HomePage() {
 
       setSuggestions(next)
       setSuggestLoading(false)
-      setSuggestOpen(true)
+      if (document.activeElement === inputRef.current) {
+        setSuggestOpen(true)
+      }
       setActiveIndex(0)
     }, 120)
 
@@ -370,7 +382,10 @@ export default function HomePage() {
               ref={inputRef}
               type="text"
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => {
+                suppressSuggestOpenRef.current = false
+                setSearch(e.target.value)
+              }}
               onFocus={() => {
                 if (suggestions.length > 0) setSuggestOpen(true)
               }}
