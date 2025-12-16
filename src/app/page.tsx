@@ -34,6 +34,16 @@ type Suggestion =
       count?: number
     }
 
+function escapePostgrestOrValue(input: string) {
+  // Escape characters that break PostgREST logic trees in `or=(...)`
+  // Order matters: escape backslash first.
+  return input
+    .replace(/\\/g, '\\\\')
+    .replace(/,/g, '\\,')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)')
+}
+
 function swapCommaName(name: string) {
   // "Last, First" -> "First Last" (best effort)
   const parts = name.split(',').map(s => s.trim())
@@ -118,11 +128,12 @@ export default function HomePage() {
 
       // Pull a modest slice, then derive grouped suggestions client-side.
       // This keeps us aligned with the current schema (books table only).
-      const { data, error } = await supabase
+      const qSafe = escapePostgrestOrValue(q)
+      const { data, error } = await supabase 
         .from('books')
         .select('id,title,author_last_first,series,pub_year,publisher')
         .or(
-          `title.ilike.%${q}%,author_last_first.ilike.%${q}%,series.ilike.%${q}%,publisher.ilike.%${q}%`
+          `title.ilike.%${qSafe}%,author_last_first.ilike.%${qSafe}%,series.ilike.%${qSafe}%,publisher.ilike.%${qSafe}%`
         )
         .order('sort_title', { ascending: true })
         .limit(60)
@@ -282,11 +293,10 @@ export default function HomePage() {
         .order('sort_title', { ascending: true })
         .limit(200)
 
-      if (trimmed) {
-        query = query.or(
-          `title.ilike.%${trimmed}%,author_last_first.ilike.%${trimmed}%,series.ilike.%${trimmed}%,publisher.ilike.%${trimmed}%,notes.ilike.%${trimmed}%`
-        )
-      }
+      const tSafe = escapePostgrestOrValue(trimmed)
+      query = query.or(
+        `title.ilike.%${tSafe}%,author_last_first.ilike.%${tSafe}%,series.ilike.%${tSafe}%,publisher.ilike.%${tSafe}%,notes.ilike.%${tSafe}%`
+      )
 
       const { data, error } = await query
 
