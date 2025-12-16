@@ -57,11 +57,46 @@ function scoreMatch(query: string, candidate: string) {
   if (!q) return 0
   if (c === q) return 100
   if (c.startsWith(q)) return 80
-  // word-start boosts
   const wordStart = c.split(/\s+/).some(w => w.startsWith(q))
   if (wordStart) return 65
   if (c.includes(q)) return 45
   return 0
+}
+
+function makeIlikePattern(q: string) {
+  return `%${q.trim()}%`
+}
+
+function dedupeById<T extends { id: number }>(rows: T[]) {
+  const map = new Map<number, T>()
+  for (const r of rows) map.set(r.id, r)
+  return Array.from(map.values())
+}
+
+async function fetchUnionByIlike(
+  q: string,
+  fields: string[],
+  select: string,
+  limitPerField: number
+) {
+  const pattern = makeIlikePattern(q)
+
+  const requests = fields.map(field =>
+    supabase
+      .from('books')
+      .select(select)
+      .ilike(field, pattern)
+      .order('sort_title', { ascending: true })
+      .limit(limitPerField)
+  )
+
+  const results = await Promise.all(requests)
+
+  const firstErr = results.find(r => r.error)?.error
+  if (firstErr) return { data: null as any, error: firstErr }
+
+  const allRows = results.flatMap(r => (r.data ?? []) as any[])
+  return { data: dedupeById(allRows), error: null }
 }
 
 export default function HomePage() {
@@ -76,13 +111,15 @@ export default function HomePage() {
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement | null>(null)
   const suggestBoxRef = useRef<HTMLDivElement | null>(null)
+  const suppressSuggestOpenRef = useRef(false)
 
   const trimmed = useMemo(() => search.trim(), [search])
 
   const applySuggestion = (s: Suggestion) => {
+    suppressSuggestOpenRef.current = true
     setSearch(s.value)
     setSuggestOpen(false)
-    // keep focus in the input for rapid refinement
+    setActiveIndex(0)
     requestAnimationFrame(() => inputRef.current?.focus())
   }
 
@@ -101,10 +138,17 @@ export default function HomePage() {
     return () => window.removeEventListener('mousedown', onDown)
   }, [])
 
-  // Fetch autocomplete suggestions
+  // Fetch autocomplete suggestions (no PostgREST .or() parsing)
   useEffect(() => {
     let cancelled = false
     const q = trimmed
+
+    if (suppressSuggestOpenRef.current) {
+      // We just applied a suggestion; keep the dropdown closed until user types again.
+      setSuggestOpen(false)
+      setSuggestLoading(false)
+      return
+    }
 
     if (!q) {
       setSuggestions([])
@@ -116,16 +160,12 @@ export default function HomePage() {
     const t = window.setTimeout(async () => {
       setSuggestLoading(true)
 
-      // Pull a modest slice, then derive grouped suggestions client-side.
-      // This keeps us aligned with the current schema (books table only).
-      const { data, error } = await supabase
-        .from('books')
-        .select('id,title,author_last_first,series,pub_year,publisher')
-        .or(
-          `title.ilike.%${q}%,author_last_first.ilike.%${q}%,series.ilike.%${q}%,publisher.ilike.%${q}%`
-        )
-        .order('sort_title', { ascending: true })
-        .limit(60)
+      const { data, error } = await fetchUnionByIlike(
+        q,
+        ['title', 'author_last_first', 'series', 'publisher'],
+        'id,title,author_last_first,series,pub_year,publisher',
+        30
+      )
 
       if (cancelled) return
 
@@ -260,7 +300,9 @@ export default function HomePage() {
 
       setSuggestions(next)
       setSuggestLoading(false)
-      setSuggestOpen(true)
+      if (document.activeElement === inputRef.current) {
+        setSuggestOpen(true)
+      }
       setActiveIndex(0)
     }, 120)
 
@@ -270,31 +312,49 @@ export default function HomePage() {
     }
   }, [trimmed])
 
-  // Fetch filtered books
+  // Fetch filtered books (mobile-first, full width; no .or())
   useEffect(() => {
     const fetchBooks = async () => {
       setLoading(true)
       setError(null)
 
-      let query = supabase
-        .from('books')
-        .select('*')
-        .order('sort_title', { ascending: true })
-        .limit(200)
+      if (!trimmed) {
+        const { data, error } = await supabase
+          .from('books')
+          .select('*')
+          .order('sort_title', { ascending: true })
+          .limit(600)
 
-      if (trimmed) {
-        query = query.or(
-          `title.ilike.%${trimmed}%,author_last_first.ilike.%${trimmed}%,series.ilike.%${trimmed}%,publisher.ilike.%${trimmed}%,notes.ilike.%${trimmed}%`
-        )
+        if (error) {
+          console.error(error)
+          setError(error.message)
+        } else {
+          setBooks((data ?? []) as Book[])
+        }
+
+        setLoading(false)
+        return
       }
 
-      const { data, error } = await query
+      const { data, error } = await fetchUnionByIlike(
+        trimmed,
+        ['title', 'author_last_first', 'series', 'publisher', 'notes'],
+        '*',
+        250
+      )
 
       if (error) {
         console.error(error)
         setError(error.message)
       } else {
-        setBooks((data ?? []) as Book[])
+        const sorted = ((data ?? []) as Book[])
+          .slice()
+          .sort((a, b) =>
+            ((a as any).sort_title ?? a.title).localeCompare(
+              ((b as any).sort_title ?? b.title) as string
+            )
+          )
+        setBooks(sorted.slice(0, 600))
       }
 
       setLoading(false)
@@ -305,9 +365,9 @@ export default function HomePage() {
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="mx-auto flex max-w-6xl flex-col gap-8 px-4 py-8 md:flex-row">
+      <div className="w-full px-3 py-4 sm:px-6 sm:py-6 lg:grid lg:grid-cols-[1fr_360px] lg:gap-6">
         {/* Left: library browser */}
-        <section className="w-full md:w-2/3">
+        <section className="w-full">
           <header className="mb-4">
             <h1 className="text-3xl font-semibold tracking-tight">
               Vintage SF Library
@@ -322,7 +382,10 @@ export default function HomePage() {
               ref={inputRef}
               type="text"
               value={search}
-              onChange={e => setSearch(e.target.value)}
+              onChange={e => {
+                suppressSuggestOpenRef.current = false
+                setSearch(e.target.value)
+              }}
               onFocus={() => {
                 if (suggestions.length > 0) setSuggestOpen(true)
               }}
@@ -415,7 +478,6 @@ export default function HomePage() {
                               }
                               onMouseEnter={() => setActiveIndex(idx)}
                               onMouseDown={e => {
-                                // prevent input from losing focus before click
                                 e.preventDefault()
                               }}
                               onClick={() => applySuggestion(s)}
@@ -455,43 +517,48 @@ export default function HomePage() {
           {loading && <p className="text-sm">Loading books…</p>}
           {error && <p className="text-sm text-red-400">Error: {error}</p>}
 
-          <ul className="mt-2 space-y-2 text-sm">
+          <ul className="mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">
             {books.map(book => (
               <li
                 key={book.id}
-                className="rounded border border-slate-800 bg-slate-900/60 p-3"
+                className="rounded border border-slate-800 bg-slate-900/60 p-3 hover:border-slate-700"
               >
                 <div className="flex justify-between gap-2">
-                  <div>
-                    <div className="font-semibold">{book.title}</div>
-                    <div className="text-xs text-slate-300">
+                  <div className="min-w-0">
+                    <div className="truncate font-semibold">{book.title}</div>
+                    <div className="truncate text-xs text-slate-300">
                       {book.author_last_first}
                     </div>
                   </div>
-                  <div className="text-right text-[11px] text-slate-400">
+                  <div className="shrink-0 text-right text-[11px] text-slate-400">
                     {book.pub_year && <div>{book.pub_year}</div>}
                     {book.publisher && <div>{book.publisher}</div>}
                     {book.signed && <div>Signed</div>}
                   </div>
                 </div>
                 {book.notes && (
-                  <p className="mt-1 line-clamp-2 text-[11px] text-slate-400">
+                  <p className="mt-1 line-clamp-3 text-[11px] text-slate-400">
                     {book.notes}
                   </p>
                 )}
               </li>
             ))}
+
             {!loading && !error && books.length === 0 && (
-              <p className="mt-4 text-sm text-slate-300">
-                No books match your search.
-              </p>
+              <li className="col-span-full">
+                <p className="mt-4 text-sm text-slate-300">
+                  No books match your search.
+                </p>
+              </li>
             )}
           </ul>
         </section>
 
         {/* Right: AI panel */}
-        <section className="w-full md:w-1/3">
-          <AiPanel />
+        <section className="mt-6 w-full lg:mt-0">
+          <div className="lg:sticky lg:top-6">
+            <AiPanel />
+          </div>
         </section>
       </div>
     </main>
