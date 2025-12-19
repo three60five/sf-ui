@@ -4,7 +4,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabaseClient'
 import type { Book } from '@/lib/types'
-import AiPanel from '@/components/AiPanel'
 
 type Suggestion =
   | {
@@ -365,7 +364,7 @@ export default function HomePage() {
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
-      <div className="w-full px-3 py-4 sm:px-6 sm:py-6 lg:grid lg:grid-cols-[1fr_360px] lg:gap-6">
+      <div className="w-full px-3 py-4 sm:px-6 sm:py-6">
         {/* Left: library browser */}
         <section className="w-full">
           <header className="mb-4">
@@ -554,12 +553,6 @@ export default function HomePage() {
           </ul>
         </section>
 
-        {/* Right: AI panel */}
-        <section className="mt-6 w-full lg:mt-0">
-          <div className="lg:sticky lg:top-6">
-            <AiPanel />
-          </div>
-        </section>
       </div>
     </main>
   )
