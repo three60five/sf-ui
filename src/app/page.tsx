@@ -103,6 +103,11 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  const [groupMode, setGroupMode] = useState<
+    'author' | 'publisher' | 'cover_artist'
+  >('author')
+  const [recentSearches, setRecentSearches] = useState<string[]>([])
+  const [randomPicks, setRandomPicks] = useState<Book[]>([])
 
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
   const [suggestLoading, setSuggestLoading] = useState(false)
@@ -113,6 +118,16 @@ export default function HomePage() {
   const suppressSuggestOpenRef = useRef(false)
 
   const trimmed = useMemo(() => search.trim(), [search])
+  const recentStorageKey = 'sf-ui-recent-searches'
+
+  const shuffleSample = (rows: Book[], count: number) => {
+    const copy = rows.slice()
+    for (let i = copy.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1))
+      ;[copy[i], copy[j]] = [copy[j], copy[i]]
+    }
+    return copy.slice(0, count)
+  }
 
   const applySuggestion = (s: Suggestion) => {
     suppressSuggestOpenRef.current = true
@@ -120,6 +135,29 @@ export default function HomePage() {
     setSuggestOpen(false)
     setActiveIndex(0)
     requestAnimationFrame(() => inputRef.current?.focus())
+  }
+
+  const applyQuickSearch = (value: string) => {
+    suppressSuggestOpenRef.current = true
+    setSearch(value)
+    setSuggestOpen(false)
+    setActiveIndex(0)
+    requestAnimationFrame(() => inputRef.current?.focus())
+  }
+
+  const storeRecentSearch = (value: string) => {
+    const cleaned = value.trim()
+    if (!cleaned) return
+    setRecentSearches(prev => {
+      const next = [cleaned, ...prev.filter(item => item !== cleaned)].slice(
+        0,
+        6
+      )
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(recentStorageKey, JSON.stringify(next))
+      }
+      return next
+    })
   }
 
   // Close suggestions on outside click
@@ -135,6 +173,20 @@ export default function HomePage() {
     }
     window.addEventListener('mousedown', onDown)
     return () => window.removeEventListener('mousedown', onDown)
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const stored = window.localStorage.getItem(recentStorageKey)
+    if (!stored) return
+    try {
+      const parsed = JSON.parse(stored)
+      if (Array.isArray(parsed)) {
+        setRecentSearches(parsed.filter((item): item is string => !!item))
+      }
+    } catch {
+      setRecentSearches([])
+    }
   }, [])
 
   // Fetch autocomplete suggestions (no PostgREST .or() parsing)
@@ -328,7 +380,9 @@ export default function HomePage() {
           console.error(error)
           setError(error.message)
         } else {
-          setBooks((data ?? []) as Book[])
+          const nextBooks = (data ?? []) as Book[]
+          setBooks(nextBooks)
+          setRandomPicks(shuffleSample(nextBooks, 12))
         }
 
         setLoading(false)
@@ -361,6 +415,60 @@ export default function HomePage() {
 
     fetchBooks()
   }, [trimmed])
+
+  useEffect(() => {
+    if (!trimmed) return
+    const t = window.setTimeout(() => {
+      storeRecentSearch(trimmed)
+    }, 700)
+    return () => window.clearTimeout(t)
+  }, [trimmed])
+
+  useEffect(() => {
+    if (!trimmed && books.length > 0 && randomPicks.length === 0) {
+      setRandomPicks(shuffleSample(books, 12))
+    }
+  }, [books, randomPicks.length, trimmed])
+
+  const groupStats = useMemo(() => {
+    const author = new Map<string, number>()
+    const publisher = new Map<string, number>()
+    const coverArtist = new Map<string, number>()
+
+    for (const book of books) {
+      if (book.author_last_first) {
+        author.set(
+          book.author_last_first,
+          (author.get(book.author_last_first) ?? 0) + 1
+        )
+      }
+      if (book.publisher) {
+        publisher.set(
+          book.publisher,
+          (publisher.get(book.publisher) ?? 0) + 1
+        )
+      }
+      if (book.cover_artist) {
+        coverArtist.set(
+          book.cover_artist,
+          (coverArtist.get(book.cover_artist) ?? 0) + 1
+        )
+      }
+    }
+
+    const toSorted = (map: Map<string, number>) =>
+      [...map.entries()]
+        .filter(([name]) => name.trim().length > 0)
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+
+    return {
+      author: toSorted(author),
+      publisher: toSorted(publisher),
+      cover_artist: toSorted(coverArtist),
+    }
+  }, [books])
+
+  const groupEntries = groupStats[groupMode].slice(0, 12)
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -516,41 +624,199 @@ export default function HomePage() {
           {loading && <p className="text-sm">Loading books…</p>}
           {error && <p className="text-sm text-red-400">Error: {error}</p>}
 
-          <ul className="mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">
-            {books.map(book => (
-              <li
-                key={book.id}
-                className="rounded border border-slate-800 bg-slate-900/60 p-3 hover:border-slate-700"
-              >
-                <div className="flex justify-between gap-2">
-                  <div className="min-w-0">
-                    <div className="truncate font-semibold">{book.title}</div>
-                    <div className="truncate text-xs text-slate-300">
-                      {book.author_last_first}
+          {!trimmed ? (
+            <div className="mt-6 grid gap-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+              <div className="space-y-6">
+                <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+                        Explore by
+                      </h2>
+                      <p className="mt-1 text-xs text-slate-400">
+                        Jump into the collection through key creators and
+                        imprints.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      {[
+                        { id: 'author', label: 'Authors' },
+                        { id: 'publisher', label: 'Publishers' },
+                        { id: 'cover_artist', label: 'Cover artists' },
+                      ].map(option => (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() =>
+                            setGroupMode(
+                              option.id as 'author' | 'publisher' | 'cover_artist'
+                            )
+                          }
+                          className={
+                            'rounded-full border px-3 py-1 transition ' +
+                            (groupMode === option.id
+                              ? 'border-sky-400 bg-sky-500/20 text-sky-100'
+                              : 'border-slate-700 text-slate-300 hover:border-slate-500')
+                          }
+                        >
+                          {option.label}
+                        </button>
+                      ))}
                     </div>
                   </div>
-                  <div className="shrink-0 text-right text-[11px] text-slate-400">
-                    {book.pub_year && <div>{book.pub_year}</div>}
-                    {book.publisher && <div>{book.publisher}</div>}
-                    {book.signed && <div>Signed</div>}
-                  </div>
-                </div>
-                {book.notes && (
-                  <p className="mt-1 line-clamp-3 text-[11px] text-slate-400">
-                    {book.notes}
-                  </p>
-                )}
-              </li>
-            ))}
 
-            {!loading && !error && books.length === 0 && (
-              <li className="col-span-full">
-                <p className="mt-4 text-sm text-slate-300">
-                  No books match your search.
-                </p>
-              </li>
-            )}
-          </ul>
+                  {groupEntries.length === 0 ? (
+                    <p className="mt-4 text-xs text-slate-400">
+                      Nothing to group yet. Try another filter or refresh the
+                      library.
+                    </p>
+                  ) : (
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      {groupEntries.map(([label, count]) => (
+                        <button
+                          key={label}
+                          type="button"
+                          onClick={() => applyQuickSearch(label)}
+                          className="flex items-center justify-between rounded border border-slate-800 bg-slate-950/60 px-3 py-2 text-left text-sm hover:border-slate-600"
+                        >
+                          <span className="truncate font-medium">{label}</span>
+                          <span className="ml-2 shrink-0 text-xs text-slate-400">
+                            {count} titles
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+                        Recent searches
+                      </h2>
+                      <p className="mt-1 text-xs text-slate-400">
+                        Pick up where you left off.
+                      </p>
+                    </div>
+                  </div>
+                  {recentSearches.length === 0 ? (
+                    <p className="mt-3 text-xs text-slate-400">
+                      No recent searches yet. Start typing to build your
+                      history.
+                    </p>
+                  ) : (
+                    <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                      {recentSearches.map(item => (
+                        <button
+                          key={item}
+                          type="button"
+                          onClick={() => applyQuickSearch(item)}
+                          className="rounded-full border border-slate-700 px-3 py-1 text-slate-200 hover:border-slate-500"
+                        >
+                          {item}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-800 bg-slate-900/40 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+                      Random picks
+                    </h2>
+                    <p className="mt-1 text-xs text-slate-400">
+                      A rotating slice of your shelves.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setRandomPicks(shuffleSample(books, randomPicks.length || 12))
+                    }
+                    disabled={loading || books.length === 0}
+                    className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Shuffle
+                  </button>
+                </div>
+
+                {randomPicks.length === 0 ? (
+                  <p className="mt-4 text-xs text-slate-400">
+                    Loading a random stack…
+                  </p>
+                ) : (
+                  <ul className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
+                    {randomPicks.map(book => (
+                      <li
+                        key={book.id}
+                        className="rounded border border-slate-800 bg-slate-950/60 p-3 hover:border-slate-700"
+                      >
+                        <div className="flex justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold">
+                              {book.title}
+                            </div>
+                            <div className="truncate text-xs text-slate-300">
+                              {book.author_last_first}
+                            </div>
+                          </div>
+                          <div className="shrink-0 text-right text-[11px] text-slate-400">
+                            {book.pub_year && <div>{book.pub_year}</div>}
+                            {book.publisher && <div>{book.publisher}</div>}
+                          </div>
+                        </div>
+                        {book.notes && (
+                          <p className="mt-1 line-clamp-2 text-[11px] text-slate-400">
+                            {book.notes}
+                          </p>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          ) : (
+            <ul className="mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">
+              {books.map(book => (
+                <li
+                  key={book.id}
+                  className="rounded border border-slate-800 bg-slate-900/60 p-3 hover:border-slate-700"
+                >
+                  <div className="flex justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate font-semibold">{book.title}</div>
+                      <div className="truncate text-xs text-slate-300">
+                        {book.author_last_first}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right text-[11px] text-slate-400">
+                      {book.pub_year && <div>{book.pub_year}</div>}
+                      {book.publisher && <div>{book.publisher}</div>}
+                      {book.signed && <div>Signed</div>}
+                    </div>
+                  </div>
+                  {book.notes && (
+                    <p className="mt-1 line-clamp-3 text-[11px] text-slate-400">
+                      {book.notes}
+                    </p>
+                  )}
+                </li>
+              ))}
+
+              {!loading && !error && books.length === 0 && (
+                <li className="col-span-full">
+                  <p className="mt-4 text-sm text-slate-300">
+                    No books match your search.
+                  </p>
+                </li>
+              )}
+            </ul>
+          )}
         </section>
 
       </div>

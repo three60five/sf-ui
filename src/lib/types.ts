@@ -9,8 +9,8 @@ export type Book = {
   series: string | null
   work_type: string | null
   tier: string | null
+  cover_artist?: string | null
   signed: boolean
   notes: string | null
   created_at: string
 }
-
