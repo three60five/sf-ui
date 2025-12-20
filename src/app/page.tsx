@@ -148,7 +148,7 @@ async function fetchBooksByAuthor(q: string, limitPerField: number) {
     .in('id', ids)
     .order('sort_title', { ascending: true })
 
-  return { data: (data ?? []) as Book[], error }
+  return { data: ((data ?? []) as unknown) as Book[], error }
 }
 
 async function fetchBooksByPublisher(q: string, limitPerField: number) {
