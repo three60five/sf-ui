@@ -2,7 +2,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { supabase } from '@/lib/supabaseClient'
+import { supabase, supabaseEnvReady } from '@/lib/supabaseClient'
 import type { Book } from '@/lib/types'
 
 type Suggestion =
@@ -92,6 +92,9 @@ async function fetchBooksByIlikeFields(
   fields: string[],
   limitPerField: number
 ) {
+  if (!supabase) {
+    return { data: null as any, error: new Error('Missing Supabase env vars') }
+  }
   const pattern = makeIlikePattern(q)
 
   const requests = fields.map(field =>
@@ -114,6 +117,9 @@ async function fetchBooksByIlikeFields(
 }
 
 async function fetchBooksByAuthor(q: string, limitPerField: number) {
+  if (!supabase) {
+    return { data: null as any, error: new Error('Missing Supabase env vars') }
+  }
   const pattern = makeIlikePattern(q)
   const requests = [
     supabase
@@ -152,6 +158,9 @@ async function fetchBooksByAuthor(q: string, limitPerField: number) {
 }
 
 async function fetchBooksByPublisher(q: string, limitPerField: number) {
+  if (!supabase) {
+    return { data: null as any, error: new Error('Missing Supabase env vars') }
+  }
   const pattern = makeIlikePattern(q)
   const { data: publishers, error } = await supabase
     .from('publishers')
@@ -469,6 +478,12 @@ export default function HomePage() {
     const fetchBooks = async () => {
       setLoading(true)
       setError(null)
+
+      if (!supabaseEnvReady || !supabase) {
+        setError('Missing Supabase env vars')
+        setLoading(false)
+        return
+      }
 
       if (!trimmed) {
         const { data, error } = await supabase
