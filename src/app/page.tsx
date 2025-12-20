@@ -898,52 +898,73 @@ export default function HomePage() {
                 )}
               </div>
             </div>
+          ) : books.length === 0 ? (
+            !loading &&
+            !error && (
+              <p className="mt-4 text-sm text-slate-300">
+                No books match your search.
+              </p>
+            )
           ) : (
-            <ul className="mt-3 grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 xl:grid-cols-3">
-              {books.map(book => (
-                <li
-                  key={book.id}
-                  className="rounded border border-slate-800 bg-slate-900/60 p-3 hover:border-slate-700"
-                >
-                  {(() => {
+            <div className="mt-3 overflow-hidden rounded border border-slate-800">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-900/70 text-[11px] uppercase tracking-wide text-slate-400">
+                  <tr>
+                    <th scope="col" className="px-3 py-2 font-semibold">
+                      Title &amp; Author
+                    </th>
+                    <th scope="col" className="px-3 py-2 font-semibold">
+                      Publisher
+                    </th>
+                    <th scope="col" className="px-3 py-2 font-semibold">
+                      Year
+                    </th>
+                    <th scope="col" className="px-3 py-2 font-semibold">
+                      Signed
+                    </th>
+                    <th scope="col" className="px-3 py-2 font-semibold">
+                      Notes
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-800">
+                  {books.map(book => {
                     const authorNames = getBookAuthors(book)
                     const publisherName = getBookPublisher(book)
                     return (
-                      <div className="flex justify-between gap-2">
-                        <div className="min-w-0">
-                          <div className="truncate font-semibold">
+                      <tr key={book.id} className="hover:bg-slate-900/40">
+                        <td className="px-3 py-3 align-top">
+                          <div className="font-semibold text-slate-100">
                             {book.title}
                           </div>
                           {authorNames.length > 0 && (
-                            <div className="truncate text-xs text-slate-300">
+                            <div className="text-xs text-slate-300">
                               {authorNames.join(', ')}
                             </div>
                           )}
-                        </div>
-                        <div className="shrink-0 text-right text-[11px] text-slate-400">
-                          {book.pub_year && <div>{book.pub_year}</div>}
-                          {publisherName && <div>{publisherName}</div>}
-                          {book.signed && <div>Signed</div>}
-                        </div>
-                      </div>
+                        </td>
+                        <td className="px-3 py-3 align-top text-xs text-slate-300">
+                          {publisherName ?? '—'}
+                        </td>
+                        <td className="px-3 py-3 align-top text-xs text-slate-300">
+                          {book.pub_year ?? '—'}
+                        </td>
+                        <td className="px-3 py-3 align-top text-xs text-slate-300">
+                          {book.signed ? 'Signed' : '—'}
+                        </td>
+                        <td className="px-3 py-3 align-top text-xs text-slate-300">
+                          {book.notes ? (
+                            <p className="line-clamp-2">{book.notes}</p>
+                          ) : (
+                            '—'
+                          )}
+                        </td>
+                      </tr>
                     )
-                  })()}
-                  {book.notes && (
-                    <p className="mt-1 line-clamp-3 text-[11px] text-slate-400">
-                      {book.notes}
-                    </p>
-                  )}
-                </li>
-              ))}
-
-              {!loading && !error && books.length === 0 && (
-                <li className="col-span-full">
-                  <p className="mt-4 text-sm text-slate-300">
-                    No books match your search.
-                  </p>
-                </li>
-              )}
-            </ul>
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
 
