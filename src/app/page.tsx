@@ -33,15 +33,6 @@ type Suggestion =
       count?: number
     }
 
-function swapCommaName(name: string) {
-  // "Last, First" -> "First Last" (best effort)
-  const parts = name.split(',').map(s => s.trim())
-  if (parts.length < 2) return null
-  const [last, rest] = parts
-  if (!last || !rest) return null
-  return `${rest} ${last}`.replace(/\s+/g, ' ').trim()
-}
-
 function normalize(s: string) {
   return s
     .toLowerCase()
@@ -72,10 +63,33 @@ function dedupeById<T extends { id: number }>(rows: T[]) {
   return Array.from(map.values())
 }
 
-async function fetchUnionByIlike(
+function getAuthorDisplayName(author: NonNullable<Book['book_contributors']>[0]['authors']) {
+  return author?.display_name ?? author?.sort_name ?? null
+}
+
+function getBookAuthors(book: Book) {
+  const contributors = book.book_contributors ?? []
+  return contributors
+    .filter(c => c.role === 'author')
+    .slice()
+    .sort(
+      (a, b) => (a.credit_order ?? Number.MAX_SAFE_INTEGER) - (b.credit_order ?? Number.MAX_SAFE_INTEGER)
+    )
+    .map(c => getAuthorDisplayName(c.authors))
+    .filter((name): name is string => !!name)
+}
+
+function getBookPublisher(book: Book) {
+  return book.publishers?.name ?? null
+}
+
+const bookSelect =
+  'id,title,sort_title,pub_year,series,work_type,tier,signed,notes,created_at,' +
+  'publishers(name),book_contributors(role,credit_order,authors(display_name,sort_name))'
+
+async function fetchBooksByIlikeFields(
   q: string,
   fields: string[],
-  select: string,
   limitPerField: number
 ) {
   const pattern = makeIlikePattern(q)
@@ -83,19 +97,101 @@ async function fetchUnionByIlike(
   const requests = fields.map(field =>
     supabase
       .from('books')
-      .select(select)
+      .select(bookSelect)
       .ilike(field, pattern)
       .order('sort_title', { ascending: true })
       .limit(limitPerField)
   )
 
   const results = await Promise.all(requests)
-
   const firstErr = results.find(r => r.error)?.error
   if (firstErr) return { data: null as any, error: firstErr }
 
-  const allRows = results.flatMap(r => (r.data ?? []) as any[])
+  const allRows = results.flatMap(r => (r.data ?? []) as Book[])
   return { data: dedupeById(allRows), error: null }
+}
+
+async function fetchBooksByAuthor(q: string, limitPerField: number) {
+  const pattern = makeIlikePattern(q)
+  const requests = [
+    supabase
+      .from('book_contributors')
+      .select('book_id,authors(display_name,sort_name)')
+      .eq('role', 'author')
+      .ilike('authors.display_name', pattern)
+      .limit(limitPerField),
+    supabase
+      .from('book_contributors')
+      .select('book_id,authors(display_name,sort_name)')
+      .eq('role', 'author')
+      .ilike('authors.sort_name', pattern)
+      .limit(limitPerField),
+  ]
+
+  const results = await Promise.all(requests)
+  const firstErr = results.find(r => r.error)?.error
+  if (firstErr) return { data: null as any, error: firstErr }
+
+  const ids = Array.from(
+    new Set(
+      results.flatMap(r => (r.data ?? []) as Array<{ book_id: number }>).map(r => r.book_id)
+    )
+  )
+
+  if (ids.length === 0) return { data: [] as Book[], error: null }
+
+  const { data, error } = await supabase
+    .from('books')
+    .select(bookSelect)
+    .in('id', ids)
+    .order('sort_title', { ascending: true })
+
+  return { data: (data ?? []) as Book[], error }
+}
+
+async function fetchBooksByPublisher(q: string, limitPerField: number) {
+  const pattern = makeIlikePattern(q)
+  const { data: publishers, error } = await supabase
+    .from('publishers')
+    .select('id,name')
+    .ilike('name', pattern)
+    .limit(limitPerField)
+
+  if (error) return { data: null as any, error }
+
+  const publisherIds = (publishers ?? []).map(p => p.id)
+  if (publisherIds.length === 0) return { data: [] as Book[], error: null }
+
+  const { data, error: booksError } = await supabase
+    .from('books')
+    .select(bookSelect)
+    .in('publisher_id', publisherIds)
+    .order('sort_title', { ascending: true })
+
+  return { data: (data ?? []) as Book[], error: booksError }
+}
+
+async function fetchBooksForSearch(
+  q: string,
+  fields: string[],
+  limitPerField: number
+) {
+  const [bookFieldResult, authorResult, publisherResult] = await Promise.all([
+    fetchBooksByIlikeFields(q, fields, limitPerField),
+    fetchBooksByAuthor(q, limitPerField),
+    fetchBooksByPublisher(q, limitPerField),
+  ])
+
+  const firstErr = bookFieldResult.error || authorResult.error || publisherResult.error
+  if (firstErr) return { data: null as any, error: firstErr }
+
+  const combined = dedupeById([
+    ...(bookFieldResult.data ?? []),
+    ...(authorResult.data ?? []),
+    ...(publisherResult.data ?? []),
+  ])
+
+  return { data: combined, error: null }
 }
 
 export default function HomePage() {
@@ -103,9 +199,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [groupMode, setGroupMode] = useState<
-    'author' | 'publisher' | 'cover_artist'
-  >('author')
+  const [groupMode, setGroupMode] = useState<'author' | 'publisher'>('author')
   const [recentSearches, setRecentSearches] = useState<string[]>([])
   const [randomPicks, setRandomPicks] = useState<Book[]>([])
 
@@ -211,10 +305,9 @@ export default function HomePage() {
     const t = window.setTimeout(async () => {
       setSuggestLoading(true)
 
-      const { data, error } = await fetchUnionByIlike(
+      const { data, error } = await fetchBooksForSearch(
         q,
-        ['title', 'author_last_first', 'series', 'publisher'],
-        'id,title,author_last_first,series,pub_year,publisher',
+        ['title', 'series'],
         30
       )
 
@@ -228,40 +321,44 @@ export default function HomePage() {
         return
       }
 
-      const rows = (data ?? []) as Array<{
-        id: number
-        title: string
-        author_last_first: string
-        series: string | null
-        pub_year: number | null
-        publisher: string | null
-      }>
+      const rows = (data ?? []) as Book[]
 
       const authorCounts = new Map<string, number>()
+      const authorAlt = new Map<string, string | undefined>()
       const seriesCounts = new Map<string, number>()
       const publisherCounts = new Map<string, number>()
 
       for (const r of rows) {
-        if (r.author_last_first) {
-          authorCounts.set(
-            r.author_last_first,
-            (authorCounts.get(r.author_last_first) ?? 0) + 1
-          )
+        const authors = getBookAuthors(r)
+        for (const name of authors) {
+          authorCounts.set(name, (authorCounts.get(name) ?? 0) + 1)
         }
+
+        for (const contributor of r.book_contributors ?? []) {
+          if (contributor.role !== 'author') continue
+          const display = getAuthorDisplayName(contributor.authors)
+          const sort = contributor.authors?.sort_name ?? null
+          if (display && sort && display !== sort && !authorAlt.has(display)) {
+            authorAlt.set(display, sort)
+          }
+        }
+
         if (r.series) {
           seriesCounts.set(r.series, (seriesCounts.get(r.series) ?? 0) + 1)
         }
-        if (r.publisher) {
+
+        const publisherName = getBookPublisher(r)
+        if (publisherName) {
           publisherCounts.set(
-            r.publisher,
-            (publisherCounts.get(r.publisher) ?? 0) + 1
+            publisherName,
+            (publisherCounts.get(publisherName) ?? 0) + 1
           )
         }
       }
 
       const authorSuggestions: Suggestion[] = [...authorCounts.entries()]
         .map(([name, count]) => {
-          const alt = swapCommaName(name) ?? undefined
+          const alt = authorAlt.get(name)
           const bestScore = Math.max(
             scoreMatch(q, name),
             alt ? scoreMatch(q, alt) : 0
@@ -288,8 +385,9 @@ export default function HomePage() {
 
       const titleSuggestions: Suggestion[] = rows
         .map(r => {
+          const authors = getBookAuthors(r)
           const metaParts = [
-            r.author_last_first,
+            authors.length > 0 ? authors.join(', ') : null,
             r.pub_year ? String(r.pub_year) : null,
           ].filter(Boolean)
           return {
@@ -299,7 +397,8 @@ export default function HomePage() {
             meta: metaParts.join(' • '),
             bookId: r.id,
             _score:
-              scoreMatch(q, r.title) * 1.2 + scoreMatch(q, r.author_last_first),
+              scoreMatch(q, r.title) * 1.2 +
+              (authors[0] ? scoreMatch(q, authors[0]) : 0),
           } as Suggestion & { _score: number }
         })
         .filter((s: any) => s._score > 0)
@@ -372,7 +471,7 @@ export default function HomePage() {
       if (!trimmed) {
         const { data, error } = await supabase
           .from('books')
-          .select('*')
+          .select(bookSelect)
           .order('sort_title', { ascending: true })
           .limit(600)
 
@@ -389,10 +488,9 @@ export default function HomePage() {
         return
       }
 
-      const { data, error } = await fetchUnionByIlike(
+      const { data, error } = await fetchBooksForSearch(
         trimmed,
-        ['title', 'author_last_first', 'series', 'publisher', 'notes'],
-        '*',
+        ['title', 'series', 'notes'],
         250
       )
 
@@ -433,25 +531,18 @@ export default function HomePage() {
   const groupStats = useMemo(() => {
     const author = new Map<string, number>()
     const publisher = new Map<string, number>()
-    const coverArtist = new Map<string, number>()
 
     for (const book of books) {
-      if (book.author_last_first) {
-        author.set(
-          book.author_last_first,
-          (author.get(book.author_last_first) ?? 0) + 1
-        )
+      const authors = getBookAuthors(book)
+      for (const name of authors) {
+        author.set(name, (author.get(name) ?? 0) + 1)
       }
-      if (book.publisher) {
+
+      const publisherName = getBookPublisher(book)
+      if (publisherName) {
         publisher.set(
-          book.publisher,
-          (publisher.get(book.publisher) ?? 0) + 1
-        )
-      }
-      if (book.cover_artist) {
-        coverArtist.set(
-          book.cover_artist,
-          (coverArtist.get(book.cover_artist) ?? 0) + 1
+          publisherName,
+          (publisher.get(publisherName) ?? 0) + 1
         )
       }
     }
@@ -464,7 +555,6 @@ export default function HomePage() {
     return {
       author: toSorted(author),
       publisher: toSorted(publisher),
-      cover_artist: toSorted(coverArtist),
     }
   }, [books])
 
@@ -642,14 +732,13 @@ export default function HomePage() {
                       {[
                         { id: 'author', label: 'Authors' },
                         { id: 'publisher', label: 'Publishers' },
-                        { id: 'cover_artist', label: 'Cover artists' },
                       ].map(option => (
                         <button
                           key={option.id}
                           type="button"
                           onClick={() =>
                             setGroupMode(
-                              option.id as 'author' | 'publisher' | 'cover_artist'
+                              option.id as 'author' | 'publisher'
                             )
                           }
                           className={
@@ -755,20 +844,28 @@ export default function HomePage() {
                         key={book.id}
                         className="rounded border border-slate-800 bg-slate-950/60 p-3 hover:border-slate-700"
                       >
-                        <div className="flex justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="truncate font-semibold">
-                              {book.title}
+                        {(() => {
+                          const authorNames = getBookAuthors(book)
+                          const publisherName = getBookPublisher(book)
+                          return (
+                            <div className="flex justify-between gap-2">
+                              <div className="min-w-0">
+                                <div className="truncate font-semibold">
+                                  {book.title}
+                                </div>
+                                {authorNames.length > 0 && (
+                                  <div className="truncate text-xs text-slate-300">
+                                    {authorNames.join(', ')}
+                                  </div>
+                                )}
+                              </div>
+                              <div className="shrink-0 text-right text-[11px] text-slate-400">
+                                {book.pub_year && <div>{book.pub_year}</div>}
+                                {publisherName && <div>{publisherName}</div>}
+                              </div>
                             </div>
-                            <div className="truncate text-xs text-slate-300">
-                              {book.author_last_first}
-                            </div>
-                          </div>
-                          <div className="shrink-0 text-right text-[11px] text-slate-400">
-                            {book.pub_year && <div>{book.pub_year}</div>}
-                            {book.publisher && <div>{book.publisher}</div>}
-                          </div>
-                        </div>
+                          )
+                        })()}
                         {book.notes && (
                           <p className="mt-1 line-clamp-2 text-[11px] text-slate-400">
                             {book.notes}
@@ -787,19 +884,29 @@ export default function HomePage() {
                   key={book.id}
                   className="rounded border border-slate-800 bg-slate-900/60 p-3 hover:border-slate-700"
                 >
-                  <div className="flex justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate font-semibold">{book.title}</div>
-                      <div className="truncate text-xs text-slate-300">
-                        {book.author_last_first}
+                  {(() => {
+                    const authorNames = getBookAuthors(book)
+                    const publisherName = getBookPublisher(book)
+                    return (
+                      <div className="flex justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate font-semibold">
+                            {book.title}
+                          </div>
+                          {authorNames.length > 0 && (
+                            <div className="truncate text-xs text-slate-300">
+                              {authorNames.join(', ')}
+                            </div>
+                          )}
+                        </div>
+                        <div className="shrink-0 text-right text-[11px] text-slate-400">
+                          {book.pub_year && <div>{book.pub_year}</div>}
+                          {publisherName && <div>{publisherName}</div>}
+                          {book.signed && <div>Signed</div>}
+                        </div>
                       </div>
-                    </div>
-                    <div className="shrink-0 text-right text-[11px] text-slate-400">
-                      {book.pub_year && <div>{book.pub_year}</div>}
-                      {book.publisher && <div>{book.publisher}</div>}
-                      {book.signed && <div>Signed</div>}
-                    </div>
-                  </div>
+                    )
+                  })()}
                   {book.notes && (
                     <p className="mt-1 line-clamp-3 text-[11px] text-slate-400">
                       {book.notes}
