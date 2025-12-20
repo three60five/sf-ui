@@ -126,13 +126,13 @@ async function fetchBooksByAuthor(q: string, limitPerField: number) {
   const requests = [
     client
       .from('book_contributors')
-      .select('book_id,authors(display_name,sort_name)')
+      .select('book_id,authors!inner(display_name,sort_name)')
       .eq('role', 'author')
       .ilike('authors.display_name', pattern)
       .limit(limitPerField),
     client
       .from('book_contributors')
-      .select('book_id,authors(display_name,sort_name)')
+      .select('book_id,authors!inner(display_name,sort_name)')
       .eq('role', 'author')
       .ilike('authors.sort_name', pattern)
       .limit(limitPerField),
