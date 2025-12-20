@@ -92,13 +92,14 @@ async function fetchBooksByIlikeFields(
   fields: string[],
   limitPerField: number
 ) {
-  if (!supabase) {
+  const client = supabase
+  if (!client) {
     return { data: null as any, error: new Error('Missing Supabase env vars') }
   }
   const pattern = makeIlikePattern(q)
 
   const requests = fields.map(field =>
-    supabase
+    client
       .from('books')
       .select(bookSelect)
       .ilike(field, pattern)
@@ -117,18 +118,19 @@ async function fetchBooksByIlikeFields(
 }
 
 async function fetchBooksByAuthor(q: string, limitPerField: number) {
-  if (!supabase) {
+  const client = supabase
+  if (!client) {
     return { data: null as any, error: new Error('Missing Supabase env vars') }
   }
   const pattern = makeIlikePattern(q)
   const requests = [
-    supabase
+    client
       .from('book_contributors')
       .select('book_id,authors(display_name,sort_name)')
       .eq('role', 'author')
       .ilike('authors.display_name', pattern)
       .limit(limitPerField),
-    supabase
+    client
       .from('book_contributors')
       .select('book_id,authors(display_name,sort_name)')
       .eq('role', 'author')
@@ -148,7 +150,7 @@ async function fetchBooksByAuthor(q: string, limitPerField: number) {
 
   if (ids.length === 0) return { data: [] as Book[], error: null }
 
-  const { data, error } = await supabase
+  const { data, error } = await client
     .from('books')
     .select(bookSelect)
     .in('id', ids)
@@ -158,11 +160,12 @@ async function fetchBooksByAuthor(q: string, limitPerField: number) {
 }
 
 async function fetchBooksByPublisher(q: string, limitPerField: number) {
-  if (!supabase) {
+  const client = supabase
+  if (!client) {
     return { data: null as any, error: new Error('Missing Supabase env vars') }
   }
   const pattern = makeIlikePattern(q)
-  const { data: publishers, error } = await supabase
+  const { data: publishers, error } = await client
     .from('publishers')
     .select('id,name')
     .ilike('name', pattern)
@@ -173,13 +176,13 @@ async function fetchBooksByPublisher(q: string, limitPerField: number) {
   const publisherIds = (publishers ?? []).map(p => p.id)
   if (publisherIds.length === 0) return { data: [] as Book[], error: null }
 
-  const { data, error: booksError } = await supabase
+  const { data, error: booksError } = await client
     .from('books')
     .select(bookSelect)
     .in('publisher_id', publisherIds)
     .order('sort_title', { ascending: true })
 
-  return { data: (data ?? []) as Book[], error: booksError }
+  return { data: ((data ?? []) as unknown) as Book[], error: booksError }
 }
 
 async function fetchBooksForSearch(
@@ -479,14 +482,15 @@ export default function HomePage() {
       setLoading(true)
       setError(null)
 
-      if (!supabaseEnvReady || !supabase) {
+      const client = supabase
+      if (!supabaseEnvReady || !client) {
         setError('Missing Supabase env vars')
         setLoading(false)
         return
       }
 
       if (!trimmed) {
-        const { data, error } = await supabase
+        const { data, error } = await client
           .from('books')
           .select(bookSelect)
           .order('sort_title', { ascending: true })
@@ -496,7 +500,7 @@ export default function HomePage() {
           console.error(error)
           setError(error.message)
         } else {
-          const nextBooks = (data ?? []) as Book[]
+          const nextBooks = ((data ?? []) as unknown) as Book[]
           setBooks(nextBooks)
           setRandomPicks(shuffleSample(nextBooks, 12))
         }
