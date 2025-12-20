@@ -907,6 +907,9 @@ export default function HomePage() {
             )
           ) : (
             <div className="mt-3 overflow-hidden rounded border border-slate-800">
+              <div className="border-b border-slate-800 bg-slate-900/40 px-3 py-2 text-xs text-slate-300">
+                {books.length} {books.length === 1 ? 'book' : 'books'} in view
+              </div>
               <table className="w-full text-left text-sm">
                 <thead className="bg-slate-900/70 text-[11px] uppercase tracking-wide text-slate-400">
                   <tr>
