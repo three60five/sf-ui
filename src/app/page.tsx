@@ -107,7 +107,9 @@ async function fetchBooksByIlikeFields(
   const firstErr = results.find(r => r.error)?.error
   if (firstErr) return { data: null as any, error: firstErr }
 
-  const allRows = results.flatMap(r => (r.data ?? []) as Book[])
+  const allRows = results.flatMap(
+    r => ((r.data ?? []) as unknown) as Book[]
+  )
   return { data: dedupeById(allRows), error: null }
 }
 
